@@ -19,8 +19,8 @@ const config = {
     // Command settings
     prefix: '!', // Command prefix for normal commands
     
-    // Paths 
-    sessionsDir: path.join(__dirname, 'sessions'),
+    // Paths (Optional now for sessions if you're using MongoDB)
+    sessionsDir: path.join(__dirname, 'sessions'), // You may not need this if using MongoDB for sessions
     logsDir: path.join(__dirname, 'logs'),
     commandsDir: path.join(__dirname, 'commands'),
     uploadsDir: path.join(__dirname, 'uploads'),
@@ -58,11 +58,13 @@ const config = {
         platform: os.platform()
     },
     
-    // Database settings (if you plan to add a database later)
+    // Database settings (Now enabled for MongoDB Atlas)
     database: {
-        enabled: false,
-        type: 'json', // 'json', 'mongodb', 'mysql'
-        path: path.join(__dirname, 'database.json')
+        enabled: true, // Set to true to enable MongoDB
+        type: 'mongodb', // Use MongoDB
+        connectionString: "mongodb+srv://wa_render:wa_render123@wasession.ldgdf2h.mongodb.net/?retryWrites=true&w=majority&appName=wasession", // Your MongoDB Atlas connection string
+        dbName: 'whatsapp_sessions', // Database name for storing session data
+        collectionName: 'sessions' // Collection name where session data will be stored
     },
     
     // API settings (if you plan to use external APIs)
