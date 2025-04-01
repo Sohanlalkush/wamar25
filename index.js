@@ -4,10 +4,10 @@ const express = require('express');
 const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
+const { MongoClient } = require('mongodb');  // Import MongoDB Client
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const config = require('./config');
-const { getSessionCollection } = require('./db'); // Import MongoDB functions
 
 const app = express();
 const PORT = config.webPort || 3000;
@@ -17,74 +17,39 @@ let sock;
 let qrCodeData = null;
 let messageLog = [];
 
-// Function to load session from MongoDB
-async function loadSessionFromDB() {
-    const sessionCollection = await getSessionCollection();
-    const savedSession = await sessionCollection.findOne({ user: config.userId }); // Replace with a unique user identifier
-
-    if (savedSession && savedSession.creds) {
-        return savedSession.creds;
-    }
-    return null;
-}
-
-// Function to save session to MongoDB
-async function saveSessionToDB(creds) {
-    const sessionCollection = await getSessionCollection();
-    await sessionCollection.updateOne(
-        { user: config.userId }, // Use a unique identifier for each bot user
-        { $set: { creds } },
-        { upsert: true } // If the session doesn't exist, create a new one
-    );
-}
+// MongoDB Atlas Connection URL and Database/Collection
+const mongoUrl = "mongodb+srv://wa_render:wa_render123@wasession.ldgdf2h.mongodb.net/?retryWrites=true&w=majority&appName=wasession";  // MongoDB Atlas URI
+const client = new MongoClient(mongoUrl, { useNewUrlParser: true, useUnifiedTopology: true });
 
 async function startBot() {
-    let state;
-
-    // Try loading session from MongoDB
-    const savedState = await loadSessionFromDB();
-    if (savedState) {
-        state = savedState;
-    } else {
-        // If no session found, use the default file-based auth state
-        const { state: fileState, saveCreds } = await useMultiFileAuthState(config.sessionsDir);
-        state = fileState;
-
-        sock.ev.on('creds.update', async (creds) => {
-            // Save updated session to MongoDB
-            await saveSessionToDB(creds);
-        });
-    }
-
+    const { state, saveCreds } = await useMongoAuthState();
+    
     const baileysLogger = pino({ level: 'silent' });
-
+    
     sock = makeWASocket({
         printQRInTerminal: true,
         auth: state,
         logger: baileysLogger,
         browser: [config.botName, "Chrome", config.botVersion],
-        getMessage: async () => undefined,
+        getMessage: async () => undefined
     });
-
+    
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
+        
         if (qr) {
             qrCodeData = await QRCode.toDataURL(qr);
         }
-
+        
         if (connection === 'close') {
             if (lastDisconnect.error instanceof Boom && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
                 startBot();
             }
         }
     });
-
-    sock.ev.on('creds.update', async (creds) => {
-        // Save credentials in MongoDB on update
-        await saveSessionToDB(creds);
-    });
-
+    
+    sock.ev.on('creds.update', saveCreds);
+    
     sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const message of messages) {
             if (!message.key.fromMe) {
@@ -93,13 +58,51 @@ async function startBot() {
             }
         }
     });
-
+    
     sock.ev.on('messages.update', (updates) => {
         updates.forEach(update => {
             messageLog.push({ direction: 'outgoing', update });
         });
     });
 }
+
+// MongoDB-based authentication state storage
+async function useMongoAuthState() {
+    try {
+        await client.connect();
+        const db = client.db('whatsapp_sessions');  // The database name for sessions
+        const collection = db.collection('sessions');  // The collection name for session data
+        
+        // Load credentials from MongoDB
+        const credentials = await collection.findOne({ botName: config.botName });
+
+        // If no credentials found, initialize the session
+        if (!credentials) {
+            const { state, saveCreds } = await useMultiFileAuthState('/tmp/sessions');  // Temporary local file for the first time setup
+            await collection.insertOne({ botName: config.botName, state });
+            return { state, saveCreds };
+        }
+
+        // If credentials exist, return them
+        return {
+            state: credentials.state,
+            saveCreds: async (newCreds) => {
+                // Update session in MongoDB
+                await collection.updateOne({ botName: config.botName }, { $set: { state: newCreds } }, { upsert: true });
+            }
+        };
+    } catch (error) {
+        logger.error('Error in MongoDB connection or session retrieval:', error);
+        throw new Error('Unable to retrieve session state from MongoDB');
+    }
+}
+
+// MongoDB disconnection on app shutdown
+process.on('SIGINT', async () => {
+    logger.info('Shutting down the bot and closing MongoDB connection...');
+    await client.close();
+    process.exit();
+});
 
 // Web Route to Show Status and QR Code
 app.get('/status', (req, res) => {
