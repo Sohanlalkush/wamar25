@@ -63,7 +63,7 @@ const customLevels = {
 // Create and export the logger
 const logger = pino({
     level: 'debug', // Lower level to catch all logs
-    timestamp: () => ,"time":"${new Date().toISOString()}",
+    timestamp: () => `,"time":"${new Date().toISOString()}"`,
     customLevels
 }, transport);
 
