@@ -19,8 +19,8 @@ const config = {
     // Command settings
     prefix: '!', // Command prefix for normal commands
     
-    // Paths (Optional now for sessions if you're using MongoDB)
-    sessionsDir: path.join(__dirname, 'sessions'), // You may not need this if using MongoDB for sessions
+    // Paths 
+    sessionsDir: path.join(__dirname, 'sessions'),
     logsDir: path.join(__dirname, 'logs'),
     commandsDir: path.join(__dirname, 'commands'),
     uploadsDir: path.join(__dirname, 'uploads'),
@@ -58,13 +58,11 @@ const config = {
         platform: os.platform()
     },
     
-    // Database settings (Now enabled for MongoDB Atlas)
+    // Database settings (if you plan to add a database later)
     database: {
-        enabled: true, // Set to true to enable MongoDB
-        type: 'mongodb', // Use MongoDB
-        connectionString: "mongodb+srv://wa_render:wa_render123@wasession.ldgdf2h.mongodb.net/?retryWrites=true&w=majority&appName=wasession", // Your MongoDB Atlas connection string
-        dbName: 'whatsapp_sessions', // Database name for storing session data
-        collectionName: 'sessions' // Collection name where session data will be stored
+        enabled: false,
+        type: 'json', // 'json', 'mongodb', 'mysql'
+        path: path.join(__dirname, 'database.json')
     },
     
     // API settings (if you plan to use external APIs)
@@ -84,7 +82,7 @@ const config = {
 };
 
 // Convert owner numbers to WhatsApp format
-config.ownerNumbers = config.owner.map(num => `${num}@s.whatsapp.net`);
+config.ownerNumbers = config.owner.map(num => ${num}@s.whatsapp.net);
 
 // Export the configuration
 module.exports = config;
