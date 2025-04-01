@@ -82,7 +82,7 @@ const config = {
 };
 
 // Convert owner numbers to WhatsApp format
-config.ownerNumbers = config.owner.map(num => ${num}@s.whatsapp.net);
+config.ownerNumbers = config.owner.map(num => `${num}@s.whatsapp.net`);
 
 // Export the configuration
 module.exports = config;
