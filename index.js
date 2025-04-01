@@ -6,7 +6,7 @@ const QRCode = require('qrcode');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const config = require('./config');
-const { useMongoAuthState } = require('./mongoAuth'); // Import MongoDB Auth
+const { useMongoAuthState } = require('./mongoAuth'); // Custom MongoDB auth
 
 const app = express();
 const PORT = config.webPort || 3000;
@@ -17,7 +17,7 @@ let qrCodeData = null;
 let messageLog = [];
 
 async function startBot() {
-    const { state, saveCreds } = await useMongoAuthState(); // Use MongoDB for Auth
+    const { state, saveCreds } = await useMongoAuthState();  // Use MongoDB for Auth
 
     const baileysLogger = pino({ level: 'silent' });
 
