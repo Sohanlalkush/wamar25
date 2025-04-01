@@ -1,9 +1,9 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMongoDBAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
 const pino = require('pino');
 const QRCode = require('qrcode');
-const { MongoClient } = require('mongodb');
+const mongoose = require('mongoose');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const config = require('./config');
@@ -12,45 +12,66 @@ const app = express();
 const PORT = config.webPort || 3000;
 app.use(express.json());
 
+// MongoDB Connection
+async function connectDB() {
+    try {
+        await mongoose.connect('mongodb+srv://wa_render:wa_render123@wasession.uikatku.mongodb.net/?retryWrites=true&w=majority&appName=wasession', {
+            useNewUrlParser: true,
+            useUnifiedTopology: true
+        });
+        console.log("Connected to MongoDB");
+    } catch (error) {
+        console.error("MongoDB connection error:", error);
+    }
+}
+connectDB();
+
+// MongoDB Schema & Model for Session
+const sessionSchema = new mongoose.Schema({ _id: String, data: Object });
+const Session = mongoose.model('Session', sessionSchema);
+
+async function saveSession(id, data) {
+    await Session.findByIdAndUpdate(id, { data }, { upsert: true, new: true });
+}
+async function getSession(id) {
+    const session = await Session.findById(id);
+    return session ? session.data : null;
+}
+async function deleteSession(id) {
+    await Session.findByIdAndDelete(id);
+}
+
 let sock;
 let qrCodeData = null;
-
-// MongoDB Connection
-const mongoUrl = "mongodb+srv://wa_render:wa_render123@wasession.ldgdf2h.mongodb.net/?retryWrites=true&w=majority&appName=wasession";
-const client = new MongoClient(mongoUrl, { useNewUrlParser: true, useUnifiedTopology: true });
+let messageLog = [];
 
 async function startBot() {
-    const { state, saveCreds } = await useMongoAuthState();
+    const { state, saveCreds } = await useMongoDBAuthState({
+        get: async (key) => await getSession(key),
+        set: async (key, data) => await saveSession(key, data),
+        delete: async (key) => await deleteSession(key)
+    });
+
+    const baileysLogger = pino({ level: 'silent' });
 
     sock = makeWASocket({
         printQRInTerminal: true,
         auth: state,
-        logger: pino({ level: 'silent' }),
+        logger: baileysLogger,
         browser: [config.botName, "Chrome", config.botVersion],
         getMessage: async () => undefined
     });
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
+        
         if (qr) {
             qrCodeData = await QRCode.toDataURL(qr);
-            console.log("🔄 New QR Code Generated!");
         }
-
-        if (connection === 'open') {
-            console.log("✅ Bot Connected!");
-            qrCodeData = null; // Clear QR code after successful login
-        }
-
+        
         if (connection === 'close') {
-            if (lastDisconnect?.error instanceof Boom) {
-                const reason = lastDisconnect.error.output.statusCode;
-                console.log(`⚠️ Bot Disconnected: ${reason}`);
-                if (reason !== DisconnectReason.loggedOut) {
-                    console.log("🔄 Reconnecting...");
-                    startBot();
-                }
+            if (lastDisconnect.error instanceof Boom && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
+                startBot();
             }
         }
     });
@@ -60,45 +81,29 @@ async function startBot() {
     sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const message of messages) {
             if (!message.key.fromMe) {
+                messageLog.push({ direction: 'incoming', message });
                 await messageHandler(sock, message);
             }
         }
     });
+
+    sock.ev.on('messages.update', (updates) => {
+        updates.forEach(update => {
+            messageLog.push({ direction: 'outgoing', update });
+        });
+    });
 }
 
-// MongoDB-based session storage
-async function useMongoAuthState() {
-    await client.connect();
-    const db = client.db('whatsapp_sessions');
-    const collection = db.collection('sessions');
+// Web Route to Show Status and QR Code
+app.get('/status', (req, res) => {
+    res.send(`<h1>${config.botName} Status</h1>
+        <p>Connection: ${sock?.user ? "Connected" : "Disconnected"}</p>
+        ${qrCodeData ? `<img src='${qrCodeData}'/>` : '<p>No QR Code Available</p>'}`);
+});
 
-    const credentials = await collection.findOne({ botName: config.botName });
-
-    if (!credentials) {
-        const { state, saveCreds } = await useMultiFileAuthState('/tmp/sessions');
-        await collection.insertOne({ botName: config.botName, state });
-        return { state, saveCreds };
-    }
-
-    return {
-        state: credentials.state,
-        saveCreds: async (newCreds) => {
-            await collection.updateOne({ botName: config.botName }, { $set: { state: newCreds } }, { upsert: true });
-        }
-    };
-}
-
-// Web Route to Show QR Code & Status
-app.get('/status', async (req, res) => {
-    let qrImg = qrCodeData
-        ? `<img src="${qrCodeData}" width="200"/>`
-        : "<p>No QR Code Available. Refresh if not visible.</p>";
-
-    res.send(`
-        <h1>${config.botName} Status</h1>
-        <p>Connection: ${sock?.user ? "✅ Connected" : "❌ Disconnected"}</p>
-        ${qrImg}
-    `);
+// Web Route to View Messages
+app.get('/see', (req, res) => {
+    res.json(messageLog);
 });
 
 // Web Route to Send Messages
@@ -117,7 +122,7 @@ app.post('/send', async (req, res) => {
 
 // Start Express Server
 app.listen(PORT, () => {
-    logger.info(`🚀 Web interface running at http://localhost:${PORT}`);
+    logger.info(`Web interface running at http://localhost:${PORT}`);
 });
 
 // Start Bot
