@@ -7,6 +7,7 @@ const QRCode = require('qrcode');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const config = require('./config');
+const { getSessionCollection } = require('./db'); // Import MongoDB functions
 
 const app = express();
 const PORT = config.webPort || 3000;
@@ -16,35 +17,74 @@ let sock;
 let qrCodeData = null;
 let messageLog = [];
 
+// Function to load session from MongoDB
+async function loadSessionFromDB() {
+    const sessionCollection = await getSessionCollection();
+    const savedSession = await sessionCollection.findOne({ user: config.userId }); // Replace with a unique user identifier
+
+    if (savedSession && savedSession.creds) {
+        return savedSession.creds;
+    }
+    return null;
+}
+
+// Function to save session to MongoDB
+async function saveSessionToDB(creds) {
+    const sessionCollection = await getSessionCollection();
+    await sessionCollection.updateOne(
+        { user: config.userId }, // Use a unique identifier for each bot user
+        { $set: { creds } },
+        { upsert: true } // If the session doesn't exist, create a new one
+    );
+}
+
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState(config.sessionsDir);
-    
+    let state;
+
+    // Try loading session from MongoDB
+    const savedState = await loadSessionFromDB();
+    if (savedState) {
+        state = savedState;
+    } else {
+        // If no session found, use the default file-based auth state
+        const { state: fileState, saveCreds } = await useMultiFileAuthState(config.sessionsDir);
+        state = fileState;
+
+        sock.ev.on('creds.update', async (creds) => {
+            // Save updated session to MongoDB
+            await saveSessionToDB(creds);
+        });
+    }
+
     const baileysLogger = pino({ level: 'silent' });
-    
+
     sock = makeWASocket({
         printQRInTerminal: true,
         auth: state,
         logger: baileysLogger,
         browser: [config.botName, "Chrome", config.botVersion],
-        getMessage: async () => undefined
+        getMessage: async () => undefined,
     });
-    
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         if (qr) {
             qrCodeData = await QRCode.toDataURL(qr);
         }
-        
+
         if (connection === 'close') {
             if (lastDisconnect.error instanceof Boom && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
                 startBot();
             }
         }
     });
-    
-    sock.ev.on('creds.update', saveCreds);
-    
+
+    sock.ev.on('creds.update', async (creds) => {
+        // Save credentials in MongoDB on update
+        await saveSessionToDB(creds);
+    });
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const message of messages) {
             if (!message.key.fromMe) {
@@ -53,7 +93,7 @@ async function startBot() {
             }
         }
     });
-    
+
     sock.ev.on('messages.update', (updates) => {
         updates.forEach(update => {
             messageLog.push({ direction: 'outgoing', update });
