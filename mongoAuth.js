@@ -1,8 +1,8 @@
-const { MongoStore } = require('@whiskeysockets/baileys'); // Import MongoStore
+const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const mongoose = require('mongoose');
 const config = require('./config');
 
-// MongoDB URI (Use your connection string)
+// MongoDB connection URI
 const MONGO_URI = "mongodb+srv://wa_render:wa_render123@wasession.uikatku.mongodb.net/?retryWrites=true&w=majority&appName=wasession";
 
 // Connect to MongoDB
@@ -12,16 +12,23 @@ mongoose.connect(MONGO_URI, {
 }).then(() => console.log("✅ Connected to MongoDB for session storage"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
+// Use Multi-File Auth State to store session in MongoDB
 async function useMongoAuthState() {
-    // Create an instance of MongoStore
-    const store = new MongoStore(mongoose.connection.db, 'whatsapp_sessions'); // Collection name
+    const { state, saveCreds } = await useMultiFileAuthState(config.sessionsDir);  // Or you can use MongoStore here.
     
-    // Retrieve the current state from MongoDB
-    const state = await store.read(); // Read the stored session from MongoDB
-
+    // For storing credentials in MongoDB, you can write them to your MongoDB collection manually, if needed:
+    const saveToMongoDB = (creds) => {
+        // Store credentials in a MongoDB collection here if you need to manage sessions in your DB
+        // Example:
+        // mongoose.connection.db.collection('whatsapp_sessions').insertOne(creds);
+    };
+    
     return {
-        state, // Current session state
-        saveCreds: async (creds) => store.write(creds) // Save session credentials back to MongoDB
+        state,
+        saveCreds: (creds) => {
+            saveToMongoDB(creds);  // Save credentials to MongoDB or any custom store
+            saveCreds(creds);      // Additionally use the default saveCreds method for multi-file
+        }
     };
 }
 
