@@ -1,9 +1,9 @@
-const { default: makeWASocket, useMongoDBAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
+const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
-const mongoose = require('mongoose');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const config = require('./config');
@@ -12,48 +12,15 @@ const app = express();
 const PORT = config.webPort || 3000;
 app.use(express.json());
 
-// MongoDB Connection
-async function connectDB() {
-    try {
-        await mongoose.connect('mongodb+srv://wa_render:wa_render123@wasession.uikatku.mongodb.net/?retryWrites=true&w=majority&appName=wasession', {
-            useNewUrlParser: true,
-            useUnifiedTopology: true
-        });
-        console.log("Connected to MongoDB");
-    } catch (error) {
-        console.error("MongoDB connection error:", error);
-    }
-}
-connectDB();
-
-// MongoDB Schema & Model for Session
-const sessionSchema = new mongoose.Schema({ _id: String, data: Object });
-const Session = mongoose.model('Session', sessionSchema);
-
-async function saveSession(id, data) {
-    await Session.findByIdAndUpdate(id, { data }, { upsert: true, new: true });
-}
-async function getSession(id) {
-    const session = await Session.findById(id);
-    return session ? session.data : null;
-}
-async function deleteSession(id) {
-    await Session.findByIdAndDelete(id);
-}
-
 let sock;
 let qrCodeData = null;
 let messageLog = [];
 
 async function startBot() {
-    const { state, saveCreds } = await useMongoDBAuthState({
-        get: async (key) => await getSession(key),
-        set: async (key, data) => await saveSession(key, data),
-        delete: async (key) => await deleteSession(key)
-    });
-
+    const { state, saveCreds } = await useMultiFileAuthState(config.sessionsDir);
+    
     const baileysLogger = pino({ level: 'silent' });
-
+    
     sock = makeWASocket({
         printQRInTerminal: true,
         auth: state,
@@ -61,7 +28,7 @@ async function startBot() {
         browser: [config.botName, "Chrome", config.botVersion],
         getMessage: async () => undefined
     });
-
+    
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
@@ -75,9 +42,9 @@ async function startBot() {
             }
         }
     });
-
+    
     sock.ev.on('creds.update', saveCreds);
-
+    
     sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const message of messages) {
             if (!message.key.fromMe) {
@@ -86,7 +53,7 @@ async function startBot() {
             }
         }
     });
-
+    
     sock.ev.on('messages.update', (updates) => {
         updates.forEach(update => {
             messageLog.push({ direction: 'outgoing', update });
