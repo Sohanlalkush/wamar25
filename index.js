@@ -1,7 +1,6 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
-const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const { MongoClient } = require('mongodb');
@@ -16,88 +15,90 @@ app.use(express.json());
 let sock;
 let qrCodeData = null;
 
-// MongoDB Atlas Connection URL and Database/Collection
-const mongoUrl = "mongodb+srv://wa_render:wa_render123@wasession.ldgdf2h.mongodb.net/?retryWrites=true&w=majority&appName=wasession";  // MongoDB Atlas URI
+// MongoDB Connection
+const mongoUrl = "mongodb+srv://wa_render:wa_render123@wasession.ldgdf2h.mongodb.net/?retryWrites=true&w=majority&appName=wasession";
 const client = new MongoClient(mongoUrl, { useNewUrlParser: true, useUnifiedTopology: true });
 
 async function startBot() {
     const { state, saveCreds } = await useMongoAuthState();
-    
-    const baileysLogger = pino({ level: 'silent' });
-    
+
     sock = makeWASocket({
         printQRInTerminal: true,
         auth: state,
-        logger: baileysLogger,
+        logger: pino({ level: 'silent' }),
         browser: [config.botName, "Chrome", config.botVersion],
         getMessage: async () => undefined
     });
-    
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         if (qr) {
             qrCodeData = await QRCode.toDataURL(qr);
+            console.log("🔄 New QR Code Generated!");
         }
-        
+
+        if (connection === 'open') {
+            console.log("✅ Bot Connected!");
+            qrCodeData = null; // Clear QR code after successful login
+        }
+
         if (connection === 'close') {
-            if (lastDisconnect.error instanceof Boom && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
-                startBot();
+            if (lastDisconnect?.error instanceof Boom) {
+                const reason = lastDisconnect.error.output.statusCode;
+                console.log(`⚠️ Bot Disconnected: ${reason}`);
+                if (reason !== DisconnectReason.loggedOut) {
+                    console.log("🔄 Reconnecting...");
+                    startBot();
+                }
             }
         }
     });
-    
+
     sock.ev.on('creds.update', saveCreds);
-    
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
-        // Display incoming messages live without storing them
         for (const message of messages) {
             if (!message.key.fromMe) {
-                // Directly handle the incoming message
                 await messageHandler(sock, message);
             }
         }
     });
-    
-    sock.ev.on('messages.update', (updates) => {
-        updates.forEach(update => {
-            // Handle outgoing messages
-            messageHandler(sock, update);
-        });
-    });
 }
 
-// MongoDB-based authentication state storage
+// MongoDB-based session storage
 async function useMongoAuthState() {
     await client.connect();
-    const db = client.db('whatsapp_sessions');  // The database name for sessions
-    const collection = db.collection('sessions');  // The collection name for session data
-    
-    // Load credentials from MongoDB
+    const db = client.db('whatsapp_sessions');
+    const collection = db.collection('sessions');
+
     const credentials = await collection.findOne({ botName: config.botName });
 
-    // If no credentials found, initialize the session
     if (!credentials) {
-        const { state, saveCreds } = await useMultiFileAuthState('/tmp/sessions');  // Temporary local file for the first time setup
+        const { state, saveCreds } = await useMultiFileAuthState('/tmp/sessions');
         await collection.insertOne({ botName: config.botName, state });
         return { state, saveCreds };
     }
 
-    // If credentials exist, return them
     return {
         state: credentials.state,
         saveCreds: async (newCreds) => {
-            // Update session in MongoDB
             await collection.updateOne({ botName: config.botName }, { $set: { state: newCreds } }, { upsert: true });
         }
     };
 }
 
-// Web Route to Show Status and QR Code
-app.get('/status', (req, res) => {
-    res.send(`<h1>${config.botName} Status</h1>
-        <p>Connection: ${sock?.user ? "Connected" : "Disconnected"}</p>
-        ${qrCodeData ? `<img src='${qrCodeData}'/>` : '<p>No QR Code Available</p>'}`);
+// Web Route to Show QR Code & Status
+app.get('/status', async (req, res) => {
+    let qrImg = qrCodeData
+        ? `<img src="${qrCodeData}" width="200"/>`
+        : "<p>No QR Code Available. Refresh if not visible.</p>";
+
+    res.send(`
+        <h1>${config.botName} Status</h1>
+        <p>Connection: ${sock?.user ? "✅ Connected" : "❌ Disconnected"}</p>
+        ${qrImg}
+    `);
 });
 
 // Web Route to Send Messages
@@ -116,7 +117,7 @@ app.post('/send', async (req, res) => {
 
 // Start Express Server
 app.listen(PORT, () => {
-    logger.info(`Web interface running at http://localhost:${PORT}`);
+    logger.info(`🚀 Web interface running at http://localhost:${PORT}`);
 });
 
 // Start Bot
