@@ -1,12 +1,12 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
-const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const config = require('./config');
+const { useMongoAuthState } = require('./mongoAuth'); // Import MongoDB Auth
 
 const app = express();
 const PORT = config.webPort || 3000;
@@ -17,10 +17,10 @@ let qrCodeData = null;
 let messageLog = [];
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState(config.sessionsDir);
-    
+    const { state, saveCreds } = await useMongoAuthState(); // Use MongoDB for Auth
+
     const baileysLogger = pino({ level: 'silent' });
-    
+
     sock = makeWASocket({
         printQRInTerminal: true,
         auth: state,
@@ -28,23 +28,23 @@ async function startBot() {
         browser: [config.botName, "Chrome", config.botVersion],
         getMessage: async () => undefined
     });
-    
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         if (qr) {
             qrCodeData = await QRCode.toDataURL(qr);
         }
-        
+
         if (connection === 'close') {
             if (lastDisconnect.error instanceof Boom && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
                 startBot();
             }
         }
     });
-    
-    sock.ev.on('creds.update', saveCreds);
-    
+
+    sock.ev.on('creds.update', saveCreds); // Save credentials to MongoDB
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const message of messages) {
             if (!message.key.fromMe) {
@@ -53,7 +53,7 @@ async function startBot() {
             }
         }
     });
-    
+
     sock.ev.on('messages.update', (updates) => {
         updates.forEach(update => {
             messageLog.push({ direction: 'outgoing', update });
