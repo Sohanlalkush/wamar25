@@ -4,7 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
-const { MongoClient } = require('mongodb');  // Import MongoDB Client
+const { MongoClient } = require('mongodb');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const config = require('./config');
@@ -15,7 +15,6 @@ app.use(express.json());
 
 let sock;
 let qrCodeData = null;
-let messageLog = [];
 
 // MongoDB Atlas Connection URL and Database/Collection
 const mongoUrl = "mongodb+srv://wa_render:wa_render123@wasession.ldgdf2h.mongodb.net/?retryWrites=true&w=majority&appName=wasession";  // MongoDB Atlas URI
@@ -51,9 +50,10 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds);
     
     sock.ev.on('messages.upsert', async ({ messages }) => {
+        // Display incoming messages live without storing them
         for (const message of messages) {
             if (!message.key.fromMe) {
-                messageLog.push({ direction: 'incoming', message });
+                // Directly handle the incoming message
                 await messageHandler(sock, message);
             }
         }
@@ -61,59 +61,43 @@ async function startBot() {
     
     sock.ev.on('messages.update', (updates) => {
         updates.forEach(update => {
-            messageLog.push({ direction: 'outgoing', update });
+            // Handle outgoing messages
+            messageHandler(sock, update);
         });
     });
 }
 
 // MongoDB-based authentication state storage
 async function useMongoAuthState() {
-    try {
-        await client.connect();
-        const db = client.db('whatsapp_sessions');  // The database name for sessions
-        const collection = db.collection('sessions');  // The collection name for session data
-        
-        // Load credentials from MongoDB
-        const credentials = await collection.findOne({ botName: config.botName });
+    await client.connect();
+    const db = client.db('whatsapp_sessions');  // The database name for sessions
+    const collection = db.collection('sessions');  // The collection name for session data
+    
+    // Load credentials from MongoDB
+    const credentials = await collection.findOne({ botName: config.botName });
 
-        // If no credentials found, initialize the session
-        if (!credentials) {
-            const { state, saveCreds } = await useMultiFileAuthState('/tmp/sessions');  // Temporary local file for the first time setup
-            await collection.insertOne({ botName: config.botName, state });
-            return { state, saveCreds };
-        }
-
-        // If credentials exist, return them
-        return {
-            state: credentials.state,
-            saveCreds: async (newCreds) => {
-                // Update session in MongoDB
-                await collection.updateOne({ botName: config.botName }, { $set: { state: newCreds } }, { upsert: true });
-            }
-        };
-    } catch (error) {
-        logger.error('Error in MongoDB connection or session retrieval:', error);
-        throw new Error('Unable to retrieve session state from MongoDB');
+    // If no credentials found, initialize the session
+    if (!credentials) {
+        const { state, saveCreds } = await useMultiFileAuthState('/tmp/sessions');  // Temporary local file for the first time setup
+        await collection.insertOne({ botName: config.botName, state });
+        return { state, saveCreds };
     }
-}
 
-// MongoDB disconnection on app shutdown
-process.on('SIGINT', async () => {
-    logger.info('Shutting down the bot and closing MongoDB connection...');
-    await client.close();
-    process.exit();
-});
+    // If credentials exist, return them
+    return {
+        state: credentials.state,
+        saveCreds: async (newCreds) => {
+            // Update session in MongoDB
+            await collection.updateOne({ botName: config.botName }, { $set: { state: newCreds } }, { upsert: true });
+        }
+    };
+}
 
 // Web Route to Show Status and QR Code
 app.get('/status', (req, res) => {
     res.send(`<h1>${config.botName} Status</h1>
         <p>Connection: ${sock?.user ? "Connected" : "Disconnected"}</p>
         ${qrCodeData ? `<img src='${qrCodeData}'/>` : '<p>No QR Code Available</p>'}`);
-});
-
-// Web Route to View Messages
-app.get('/see', (req, res) => {
-    res.json(messageLog);
 });
 
 // Web Route to Send Messages
